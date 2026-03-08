@@ -1,12 +1,16 @@
 import streamlit as st
 import pandas as pd
-import matplotlib.pyplot as plt
+import plotly.express as px
 
 st.set_page_config(page_title="Return Analysis Dashboard", layout="wide")
 
 st.title("📦 E-Commerce Product Return Analysis Dashboard")
 
-st.write("Upload datasets to analyze product returns and financial loss.")
+st.write("Upload datasets to analyze product returns, return rates, and financial loss.")
+
+# -----------------------------
+# FILE UPLOAD
+# -----------------------------
 
 orders_file = st.file_uploader("Upload Orders Dataset", type=["csv"])
 items_file = st.file_uploader("Upload Order Items Dataset", type=["csv"])
@@ -15,33 +19,56 @@ translation_file = st.file_uploader("Upload Category Translation Dataset", type=
 
 if orders_file and items_file and products_file and translation_file:
 
+    # -----------------------------
+    # LOAD DATA
+    # -----------------------------
+
     orders = pd.read_csv(orders_file)
     items = pd.read_csv(items_file)
     products = pd.read_csv(products_file)
     translation = pd.read_csv(translation_file)
 
+    # Merge category translation
     products = pd.merge(products, translation, on="product_category_name", how="left")
 
+    # Convert dates
     orders["order_purchase_timestamp"] = pd.to_datetime(
         orders["order_purchase_timestamp"]
     )
 
-    # -------------------------------
-    # BASIC METRICS
-    # -------------------------------
+    # Merge datasets
+    merged_df = pd.merge(orders, items, on="order_id")
+    merged_df = pd.merge(merged_df, products, on="product_id")
 
-    total_orders = len(orders)
+    merged_df["is_returned"] = merged_df["order_status"] == "canceled"
 
-    returned_orders = orders[orders["order_status"] == "canceled"]
+    # -----------------------------
+    # SIDEBAR FILTERS
+    # -----------------------------
 
-    total_returns = len(returned_orders)
+    st.sidebar.header("🔎 Dashboard Filters")
+
+    category_filter = st.sidebar.selectbox(
+        "Select Product Category",
+        ["All"] + list(merged_df["product_category_name_english"].dropna().unique())
+    )
+
+    if category_filter != "All":
+        merged_df = merged_df[
+            merged_df["product_category_name_english"] == category_filter
+        ]
+
+    # -----------------------------
+    # KPI METRICS
+    # -----------------------------
+
+    total_orders = merged_df["order_id"].nunique()
+
+    total_returns = merged_df[merged_df["is_returned"]]["order_id"].nunique()
 
     return_rate = (total_returns / total_orders) * 100
 
-    cancelled_items = pd.merge(returned_orders, items, on="order_id")
-    cancelled_items = pd.merge(cancelled_items, products, on="product_id")
-
-    total_loss = cancelled_items["price"].sum()
+    total_loss = merged_df[merged_df["is_returned"]]["price"].sum()
 
     st.header("📊 Key Business Metrics")
 
@@ -52,100 +79,81 @@ if orders_file and items_file and products_file and translation_file:
     col3.metric("Return Rate", f"{return_rate:.2f}%")
     col4.metric("Financial Loss", f"${total_loss:,.2f}")
 
-    # -------------------------------
-    # DATA PREVIEW
-    # -------------------------------
-
-    st.subheader("Dataset Preview")
-
-    col1, col2 = st.columns(2)
-
-    with col1:
-        st.write("Orders")
-        st.dataframe(orders.head())
-
-    with col2:
-        st.write("Order Items")
-        st.dataframe(items.head())
-
-    # -------------------------------
-    # TOP RETURNED PRODUCTS
-    # -------------------------------
-
-    st.header("📦 Frequently Returned Product Categories")
-
-    top_products = (
-        cancelled_items["product_category_name_english"]
-        .value_counts()
-        .head(10)
-    )
-
-    fig, ax = plt.subplots()
-
-    ax.barh(top_products.index, top_products.values)
-
-    plt.title("Top Returned Product Categories")
-
-    st.pyplot(fig)
-
-    # -------------------------------
+    # -----------------------------
     # MONTHLY RETURN TREND
-    # -------------------------------
+    # -----------------------------
 
     st.header("📈 Monthly Return Trend")
 
-    returned_orders["order_month"] = (
-        returned_orders["order_purchase_timestamp"].dt.to_period("M")
+    merged_df["order_month"] = (
+        merged_df["order_purchase_timestamp"]
+        .dt.to_period("M")
+        .dt.to_timestamp()
     )
 
-    monthly_returns = returned_orders.groupby("order_month").size()
+    monthly_orders = merged_df.groupby("order_month")["order_id"].nunique()
 
-    st.line_chart(monthly_returns)
+    monthly_returns = merged_df[merged_df["is_returned"]].groupby(
+        "order_month"
+    )["order_id"].nunique()
 
-    # -------------------------------
-    # ROOT CAUSE ANALYSIS
-    # -------------------------------
+    trend_df = pd.DataFrame({
+        "orders": monthly_orders,
+        "returns": monthly_returns
+    }).fillna(0)
 
-    st.header("🔎 Root Cause Analysis")
+    trend_df["return_rate"] = (trend_df["returns"] / trend_df["orders"]) * 100
 
-    merged_df = pd.merge(orders, items, on="order_id")
-    merged_df = pd.merge(merged_df, products, on="product_id")
+    fig = px.line(
+        trend_df,
+        x=trend_df.index,
+        y="return_rate",
+        title="Monthly Return Rate Trend",
+        markers=True
+    )
 
-    merged_df["is_returned"] = merged_df["order_status"] == "canceled"
+    st.plotly_chart(fig, use_container_width=True)
 
-    # Return rate by category
+    # -----------------------------
+    # TOP RETURNED CATEGORIES
+    # -----------------------------
 
-    st.subheader("Return Rate by Category")
+    st.header("📦 Top Returned Product Categories")
 
-    category_analysis = merged_df.groupby(
+    category_returns = merged_df[merged_df["is_returned"]].groupby(
         "product_category_name_english"
-    ).agg(
-        total_orders=("order_id", "count"),
-        total_returns=("is_returned", "sum")
+    ).size().sort_values(ascending=False).head(10)
+
+    fig2 = px.bar(
+        x=category_returns.values,
+        y=category_returns.index,
+        orientation="h",
+        labels={"x": "Number of Returns", "y": "Category"},
+        title="Top 10 Returned Categories"
     )
 
-    category_analysis["return_rate"] = (
-        category_analysis["total_returns"] /
-        category_analysis["total_orders"]
-    ) * 100
+    st.plotly_chart(fig2, use_container_width=True)
 
-    category_analysis = category_analysis.sort_values(
-        "return_rate", ascending=False
-    ).head(10)
+    # -----------------------------
+    # TOP PRODUCTS CAUSING LOSS
+    # -----------------------------
 
-    fig1, ax1 = plt.subplots()
+    st.header("💰 Products Causing Highest Financial Loss")
 
-    ax1.bar(category_analysis.index, category_analysis["return_rate"])
+    loss_products = merged_df[merged_df["is_returned"]].groupby(
+        "product_id"
+    ).agg(
+        total_returns=("order_id", "count"),
+        revenue_loss=("price", "sum")
+    ).sort_values("revenue_loss", ascending=False).head(10)
 
-    plt.xticks(rotation=45)
+    st.dataframe(loss_products)
 
-    st.pyplot(fig1)
-
-    # -------------------------------
+    # -----------------------------
     # SHIPPING DELAY ANALYSIS
-    # -------------------------------
+    # -----------------------------
 
-    st.subheader("Shipping Delay vs Return Rate")
+    st.header("🚚 Shipping Delay vs Return Rate")
 
     orders["order_delivered_customer_date"] = pd.to_datetime(
         orders["order_delivered_customer_date"]
@@ -162,16 +170,39 @@ if orders_file and items_file and products_file and translation_file:
     )
 
     delay_analysis["return_rate"] = (
-        delay_analysis["returns"] /
-        delay_analysis["orders"]
+        delay_analysis["returns"] / delay_analysis["orders"]
     ) * 100
 
-    fig4, ax4 = plt.subplots()
+    fig3 = px.line(
+        delay_analysis,
+        x=delay_analysis.index,
+        y="return_rate",
+        title="Shipping Delay Impact on Return Rate"
+    )
 
-    ax4.plot(delay_analysis.index, delay_analysis["return_rate"])
+    st.plotly_chart(fig3, use_container_width=True)
 
-    st.pyplot(fig4)
+    # -----------------------------
+    # DATA PREVIEW
+    # -----------------------------
+
+    if st.checkbox("Show Raw Data"):
+        st.subheader("Merged Dataset")
+        st.dataframe(merged_df)
+
+    # -----------------------------
+    # BUSINESS INSIGHTS
+    # -----------------------------
+
+    st.header("📌 Key Insights")
+
+    st.markdown("""
+    - Some product categories show significantly higher return rates.
+    - Longer shipping delays tend to increase return probability.
+    - A small number of products contribute heavily to financial loss.
+    - Monitoring monthly return trends helps detect operational issues.
+    """)
 
 else:
 
-    st.info("Upload all datasets to run the analysis.")
+    st.info("Upload all datasets to start the dashboard.")
