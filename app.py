@@ -66,7 +66,7 @@ if orders_file and items_file and products_file and translation_file:
 
     total_returns = merged_df[merged_df["is_returned"]]["order_id"].nunique()
 
-    return_rate = (total_returns / total_orders) * 100
+    return_rate = (total_returns / total_orders) * 100 if total_orders != 0 else 0
 
     total_loss = merged_df[merged_df["is_returned"]]["price"].sum()
 
@@ -120,15 +120,20 @@ if orders_file and items_file and products_file and translation_file:
 
     st.header("📦 Top Returned Product Categories")
 
-    category_returns = merged_df[merged_df["is_returned"]].groupby(
-        "product_category_name_english"
-    ).size().sort_values(ascending=False).head(10)
+    category_returns = (
+        merged_df[merged_df["is_returned"]]
+        .groupby("product_category_name_english")
+        .size()
+        .reset_index(name="returns")
+        .sort_values("returns", ascending=False)
+        .head(10)
+    )
 
     fig2 = px.bar(
-        x=category_returns.values,
-        y=category_returns.index,
+        category_returns,
+        x="returns",
+        y="product_category_name_english",
         orientation="h",
-        labels={"x": "Number of Returns", "y": "Category"},
         title="Top 10 Returned Categories"
     )
 
