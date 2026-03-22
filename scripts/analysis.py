@@ -11,7 +11,7 @@ def product_return_analysis(orders_df, order_items_df, min_orders=10):
         total_returns=('return_flag', 'sum')
     ).reset_index()
 
-    product_stats['return_rate_%'] = (
+    product_stats['return_rate'] = (
         product_stats['total_returns'] /
         product_stats['total_orders']
     ) * 100
@@ -21,6 +21,6 @@ def product_return_analysis(orders_df, order_items_df, min_orders=10):
     ]
 
     return product_stats.sort_values(
-        by='return_rate_%',
+        by='return_rate',
         ascending=False
     )
